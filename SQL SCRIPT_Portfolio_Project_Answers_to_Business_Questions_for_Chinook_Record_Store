@@ -1,0 +1,232 @@
+--- CHINOOK RECORD STORE
+
+--- SQL Script
+
+--- The Genres with the Highest sales in USA 
+--- what are people listening to?
+
+SELECT 
+    g.name genre_name,
+    SUM(il.quantity) total_quantity_sold,
+    (CAST(SUM(il.quantity) AS FLOAT) / 
+         (SELECT COUNT(il.quantity)
+          FROM invoice_line il
+          JOIN invoice i ON il.invoice_id = i.invoice_id
+          WHERE billing_country = 'USA')) percentage_of_total_quantity_sold
+FROM genre g
+    JOIN track t ON g.genre_id = t.genre_id
+    JOIN invoice_line il ON t.track_id = il.track_id
+    JOIN invoice i ON il.invoice_id = i.invoice_id
+WHERE billing_country = 'USA'
+GROUP BY genre_name
+ORDER BY total_quantity_sold DESC;
+
+--- The Sales Support Agent Performace
+--- Who's performing better or worse?
+
+SELECT
+    e.employee_id employee_id,
+    e.first_name || " " || e.last_name employee_name,
+    e.title employee_title,
+    e.hire_date employment_date,
+    SUM(i.total) total_sales,
+    (SUM(i.total) / 
+    (SELECT SUM(i.total) 
+            FROM employee e
+            JOIN customer c ON e.employee_id = c.support_rep_id
+            JOIN invoice i ON c.customer_id = i.customer_id
+            WHERE title = 'Sales Support Agent'))percentage_of_total_sales
+FROM employee e
+    JOIN customer c ON e.employee_id = c.support_rep_id
+    JOIN invoice i ON c.customer_id = i.customer_id
+WHERE title = 'Sales Support Agent'
+GROUP BY employee_name
+ORDER BY total_sales DESC;
+
+--- Analyzing Sales and Customers by Country
+--- Which countries have profit making more opportunities judging by average value of sales per customer?
+
+WITH sales_table AS
+    (
+        SELECT
+            CASE
+                WHEN COUNT(DISTINCT(c.customer_id)) = 1 THEN 'Others' 
+                ELSE country
+            END country,
+            COUNT(DISTINCT(c.customer_id)) customer,
+            SUM(i.total) total_sales,
+            SUM(i.total) / COUNT(c.customer_id) average_order_value,
+            SUM(i.total) / COUNT(DISTINCT(c.customer_id)) average_value_of_sales_per_customer,
+            CASE
+                WHEN COUNT(DISTINCT(c.customer_id)) = 1 THEN 1
+                ELSE 0
+            END sort
+            FROM customer c
+            JOIN invoice i ON c.customer_id = i.customer_id
+            GROUP BY country
+    )
+    
+SELECT
+    country,
+    CASE
+        WHEN country = 'Others' THEN SUM(customer)
+        ELSE customer
+    END customer,
+    CASE
+        WHEN country = 'Others' THEN SUM(total_sales)
+        ELSE total_sales
+    END total_sales,
+    CASE
+        WHEN country = 'Others' THEN (SUM(average_order_value) / COUNT(average_order_value))
+        ELSE average_order_value
+    END average_order_value,
+    CASE
+        WHEN country = 'Others' THEN (SUM(average_value_of_sales_per_customer) / COUNT(average_value_of_sales_per_customer))
+        ELSE average_value_of_sales_per_customer
+    END average_value_of_sales_per_customer
+FROM sales_table
+GROUP BY 1
+ORDER BY sort ASC, total_sales DESC;
+
+--- Individual Tracks vs The Whole Album 
+--- Can we maximise profit by purchasing more of Individual tracks or by purchasing the whole album?
+
+WITH invoice_first_track AS
+    (
+     SELECT
+         il.invoice_id invoice_id,
+         MIN(il.track_id) first_track_id
+     FROM invoice_line il
+     GROUP BY 1
+    )
+
+SELECT
+    album_purchase,
+    COUNT(invoice_id) number_of_invoices,
+    CAST(count(invoice_id) AS FLOAT) / (SELECT COUNT(*) FROM invoice) percent
+FROM
+    (
+      SELECT
+        ifs.*,
+        CASE
+            WHEN
+                 (
+                  SELECT t.track_id FROM track t
+                  WHERE t.album_id = (SELECT t2.album_id FROM track t2
+                                      WHERE t2.track_id = ifs.first_track_id) 
+
+                  EXCEPT 
+
+                  SELECT il2.track_id FROM invoice_line il2
+                  WHERE il2.invoice_id = ifs.invoice_id
+                 ) IS NULL
+             AND
+                 (
+                  SELECT il2.track_id FROM invoice_line il2
+                  WHERE il2.invoice_id = ifs.invoice_id
+
+                  EXCEPT 
+
+                  SELECT t.track_id FROM track t
+                  WHERE t.album_id = (SELECT t2.album_id FROM track t2
+                                      WHERE t2.track_id = ifs.first_track_id) 
+                 ) IS NULL
+             THEN "yes"
+             ELSE "no"
+         END AS "album_purchase"
+     FROM invoice_first_track ifs
+    )
+GROUP BY album_purchase;
+
+--- The Listener's Choice
+--- Which artist is used in most playlist? Do we buy more tracks/albums made by the artist?
+
+SELECT
+    ar.artist_id artist_id, 
+    ar.name artist_name,
+    COUNT (DISTINCT(p.playlist_id)) number_of_playlist,
+    COUNT (pt.track_id) number_of_tracks
+FROM playlist p
+    JOIN playlist_track pt ON p.playlist_id = pt.playlist_id
+    JOIN track t ON pt.track_id = t.track_id
+    JOIN album a ON t.album_id = a.album_id
+    JOIN artist ar ON a.artist_id = ar.artist_id
+GROUP BY artist_name
+ORDER BY number_of_playlist DESC;
+
+--- Reviewing Sales Record of each Track
+--- Are there tracks that are yet to be sold? If yes, what genres are they? Should we buy more of this genres or ignore them completely in order to reduce cost?
+
+WITH full_track_table AS
+    (
+        SELECT 
+            DISTINCT(t.track_id) track_id,
+            t.name track_name,
+            il.quantity quantity
+            FROM track t
+            LEFT JOIN invoice_line il ON t.track_id = il.track_id
+    )
+    
+SELECT
+    CASE 
+        WHEN quantity IS NOT NULL THEN 'Purchased Tracks'
+        ELSE 'Unpurchased Tracks'
+    END purchased_history,
+    COUNT(track_id) number_of_tracks
+FROM full_track_table
+GROUP BY purchased_history;
+
+--- Digging deeper to look at each genres sales history
+--- List of tracks sold and their respective Genres
+
+WITH full_track_table AS
+    (
+        SELECT 
+            DISTINCT(t.track_id) track_id,
+            t.name track_name,
+            g.name genre_name,
+            il.quantity quantity
+            FROM track t
+            LEFT JOIN invoice_line il ON t.track_id = il.track_id
+            JOIN genre g ON t.genre_id = g.genre_id
+    )
+    
+SELECT
+    genre_name,
+    CASE 
+        WHEN quantity IS NOT NULL THEN 'Purchased Tracks'
+        ELSE 'Unpurchased Tracks'
+    END purchased_history,
+    COUNT(track_id) number_of_tracks
+FROM full_track_table
+GROUP BY genre_name, purchased_history
+HAVING purchased_history = 'Purchased Tracks'
+ORDER BY number_of_tracks DESC;
+
+--- List of tracks yet to purchased and their respective Genres
+
+WITH full_track_table AS
+    (
+        SELECT 
+            DISTINCT(t.track_id) track_id,
+            t.name track_name,
+            g.name genre_name,
+            il.quantity quantity
+            FROM track t
+            LEFT JOIN invoice_line il ON t.track_id = il.track_id
+            JOIN genre g ON t.genre_id = g.genre_id
+    )
+    
+SELECT
+    genre_name,
+    CASE 
+        WHEN quantity IS NOT NULL THEN 'Purchased Tracks'
+        ELSE 'Unpurchased Tracks'
+    END purchased_history,
+    COUNT(track_id) number_of_tracks
+FROM full_track_table
+GROUP BY genre_name, purchased_history
+HAVING purchased_history = 'Unpurchased Tracks'
+ORDER BY number_of_tracks DESC;
+
+--- THANK YOU!
